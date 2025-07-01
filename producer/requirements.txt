@@ -1,0 +1,17 @@
+# 기본 패키지
+pandas==2.3.0
+kafka-python==2.0.2
+
+# 주피터 노트북
+jupyterlab==4.0.7
+notebook==7.0.6
+ipykernel
+
+# 데이터 분석 & 시각화
+numpy==1.25.2
+matplotlib==3.8.0
+seaborn==0.12.2
+
+# 유틸리티
+python-dotenv==1.0.0
+tqdm==4.67.1 
