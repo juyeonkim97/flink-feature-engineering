@@ -49,7 +49,8 @@ public class UserFeatureJob {
                     Instant.parse(event_time),
                     ZoneOffset.of("+09:00")
                 );
-                return kstTime.toInstant(ZoneOffset.of("+09:00")).toEpochMilli();
+                long millis = kstTime.toInstant(ZoneOffset.of("+09:00")).toEpochMilli();
+                return millis;
             } catch (Exception e) {
                 return System.currentTimeMillis();
             }
@@ -112,8 +113,6 @@ public class UserFeatureJob {
             if (hour >= 0 && hour < 24) {
                 accumulator.hourlyCounts[hour]++;
                 accumulator.userId = event.user_id;
-                System.out.println("Adding event: user=" + event.user_id + ", hour=" + hour + ", total=" +
-                    Arrays.stream(accumulator.hourlyCounts).mapToInt(Integer::intValue).sum());
             }
             return accumulator;
         }
@@ -126,8 +125,6 @@ public class UserFeatureJob {
 
             // 시간대별 비율 계산
             features.time_slot_ratios = calculateTimeSlotRatios(accumulator.hourlyCounts);
-
-            System.out.println("Window result: " + features);
             return features;
         }
 
@@ -192,10 +189,8 @@ public class UserFeatureJob {
                 event.price = node.get("price").asDouble();
                 event.user_id = node.get("user_id").asText();
                 event.user_session = node.get("user_session").asText();
-
                 return event;
             } catch (Exception e) {
-                System.err.println("Failed to parse JSON: " + json + ", Error: " + e.getMessage());
                 return null;
             }
         }
@@ -247,8 +242,6 @@ public class UserFeatureJob {
                 // TTL 설정 (7일)
                 jedis.expire(key, 604800);
 
-                System.out.println("Redis saved: " + key + " -> " + hashFields);
-
             } catch (Exception e) {
                 System.err.println("Redis write failed for user " + features.user_id + ": " + e.getMessage());
             }
@@ -268,6 +261,7 @@ public class UserFeatureJob {
         Configuration conf = new Configuration();
         StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironmentWithWebUI(conf);
 
+        env.setParallelism(1);  // 병렬도 1로 설정
         env.enableCheckpointing(30000);
 
         // 체크포인트 저장소 설정 (프로젝트 루트 기준, 절대경로로 변환)
@@ -290,13 +284,13 @@ public class UserFeatureJob {
             .map(new JsonEventParser())
             .filter(event -> event != null && event.user_id != null)
             .assignTimestampsAndWatermarks(WatermarkStrategy
-                .<EcommerceEvent>forBoundedOutOfOrderness(Duration.ofHours(3))  // 3시간 지연 허용
+                .<EcommerceEvent>forBoundedOutOfOrderness(Duration.ofSeconds(1))  // 1초만 지연 허용
                 .withTimestampAssigner((event, timestamp) -> event.getEventTimeMillis()));
 
         // Event Time 슬라이딩 윈도우로 시간대 피처 계산
         DataStream<UserFeatureVector> featureStream = eventStream
             .keyBy(event -> event.user_id)
-            .window(SlidingEventTimeWindows.of(Time.hours(2), Time.minutes(10)))  // Event Time 윈도우
+            .window(SlidingEventTimeWindows.of(Time.hours(12), Time.minutes(1)))  // 5분 윈도우, 1분 슬라이드
             .aggregate(new TimeSlotAggregateFunction());
 
         featureStream.addSink(new RedisSink("localhost", 6379));
