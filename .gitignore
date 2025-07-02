@@ -3,6 +3,7 @@
 
 # Log file
 *.log
+flink-checkpoints/*
 
 # BlueJ files
 *.ctxt
