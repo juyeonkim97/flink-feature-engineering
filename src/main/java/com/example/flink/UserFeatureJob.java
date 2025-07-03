@@ -7,11 +7,13 @@ import org.apache.flink.api.common.serialization.SimpleStringSchema;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
+import org.apache.flink.streaming.api.windowing.assigners.SlidingProcessingTimeWindows;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
 import org.apache.flink.streaming.api.windowing.assigners.SlidingEventTimeWindows;
+import org.apache.flink.streaming.api.windowing.assigners.EventTimeSessionWindows;
 import org.apache.flink.streaming.api.windowing.time.Time;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -42,130 +44,213 @@ public class UserFeatureJob {
         public EcommerceEvent() {
         }
 
-        public long getEventTimeMillis() {
+        public Long getEventTimeMillis() {
             try {
-                // KST 기준으로 파싱해서 UTC 밀리초로 변환
                 LocalDateTime kstTime = LocalDateTime.ofInstant(
                     Instant.parse(event_time),
                     ZoneOffset.of("+09:00")
                 );
-                long millis = kstTime.toInstant(ZoneOffset.of("+09:00")).toEpochMilli();
-                return millis;
+                return kstTime.toInstant(ZoneOffset.of("+09:00")).toEpochMilli();
             } catch (Exception e) {
-                return System.currentTimeMillis();
-            }
-        }
-
-        public int getHourOfDay() {
-            try {
-                // KST 기준으로 시간 추출
-                return LocalDateTime.ofInstant(
-                    Instant.parse(event_time),
-                    ZoneOffset.of("+09:00")
-                ).getHour();
-            } catch (Exception e) {
-                return LocalDateTime.now(ZoneOffset.of("+09:00")).getHour();
+                return null;
             }
         }
     }
 
-    // 시간대 비율 피처만 포함한 모델
-    public static class UserFeatureVector {
+    // 1시간 사용자 활동 피처
+    public static class HourlyUserFeature {
         public String user_id;
         public long timestamp;
-        public Map<String, Double> time_slot_ratios;
-
-        public UserFeatureVector() {
-            this.time_slot_ratios = new HashMap<>();
-        }
+        public int view_count_1h;
+        public int cart_count_1h;
+        public int purchase_count_1h;
 
         @Override
         public String toString() {
-            return String.format("UserFeature{user=%s, ratios=%s}",
-                user_id, time_slot_ratios);
+            return String.format("HourlyFeature{user=%s, view=%d, cart=%d, purchase=%d}",
+                user_id, view_count_1h, cart_count_1h, purchase_count_1h);
         }
     }
 
-    // 윈도우 집계용 누적기
-    public static class TimeSlotAccumulator {
-        public String userId;
-        public Integer[] hourlyCounts;
+    // 10분 상품별 조회 피처
+    public static class ProductViewFeature {
+        public String user_id;
+        public String product_id;
+        public long timestamp;
+        public int product_view_count_10m;
 
-        public TimeSlotAccumulator() {
-            this.hourlyCounts = new Integer[24];
-            for (int i = 0; i < 24; i++) {
-                this.hourlyCounts[i] = 0;
-            }
+        @Override
+        public String toString() {
+            return String.format("ProductFeature{user=%s, product=%s, views=%d}",
+                user_id, product_id, product_view_count_10m);
         }
     }
 
-    // Processing Time 윈도우용 집계 함수
-    public static class TimeSlotAggregateFunction implements AggregateFunction<EcommerceEvent, TimeSlotAccumulator, UserFeatureVector> {
+    // 세션 피처
+    public static class SessionFeature {
+        public String user_session;
+        public String user_id;
+        public long timestamp;
+        public int total_events_in_session;
+        public long session_duration_seconds;
 
         @Override
-        public TimeSlotAccumulator createAccumulator() {
-            return new TimeSlotAccumulator();
+        public String toString() {
+            return String.format("SessionFeature{session=%s, user=%s, events=%d, duration=%ds}",
+                user_session, user_id, total_events_in_session, session_duration_seconds);
+        }
+    }
+
+    // 1시간 사용자 활동 집계
+    public static class HourlyUserAggregator implements AggregateFunction<EcommerceEvent, HourlyUserAccumulator, HourlyUserFeature> {
+
+        @Override
+        public HourlyUserAccumulator createAccumulator() {
+            return new HourlyUserAccumulator();
         }
 
         @Override
-        public TimeSlotAccumulator add(EcommerceEvent event, TimeSlotAccumulator accumulator) {
-            int hour = event.getHourOfDay();
-            if (hour >= 0 && hour < 24) {
-                accumulator.hourlyCounts[hour]++;
-                accumulator.userId = event.user_id;
+        public HourlyUserAccumulator add(EcommerceEvent event, HourlyUserAccumulator acc) {
+            acc.user_id = event.user_id;
+            switch (event.event_type) {
+                case "view":
+                    acc.view_count++;
+                    break;
+                case "cart":
+                    acc.cart_count++;
+                    break;
+                case "purchase":
+                    acc.purchase_count++;
+                    break;
             }
-            return accumulator;
+            return acc;
         }
 
         @Override
-        public UserFeatureVector getResult(TimeSlotAccumulator accumulator) {
-            UserFeatureVector features = new UserFeatureVector();
-            features.user_id = accumulator.userId;
-            features.timestamp = System.currentTimeMillis();
-
-            // 시간대별 비율 계산
-            features.time_slot_ratios = calculateTimeSlotRatios(accumulator.hourlyCounts);
-            return features;
+        public HourlyUserFeature getResult(HourlyUserAccumulator acc) {
+            HourlyUserFeature feature = new HourlyUserFeature();
+            feature.user_id = acc.user_id;
+            feature.timestamp = System.currentTimeMillis();
+            feature.view_count_1h = acc.view_count;
+            feature.cart_count_1h = acc.cart_count;
+            feature.purchase_count_1h = acc.purchase_count;
+            return feature;
         }
 
         @Override
-        public TimeSlotAccumulator merge(TimeSlotAccumulator a, TimeSlotAccumulator b) {
-            TimeSlotAccumulator merged = new TimeSlotAccumulator();
-            merged.userId = a.userId != null ? a.userId : b.userId;
-
-            for (int i = 0; i < 24; i++) {
-                merged.hourlyCounts[i] = a.hourlyCounts[i] + b.hourlyCounts[i];
-            }
+        public HourlyUserAccumulator merge(HourlyUserAccumulator a, HourlyUserAccumulator b) {
+            HourlyUserAccumulator merged = new HourlyUserAccumulator();
+            merged.user_id = a.user_id != null ? a.user_id : b.user_id;
+            merged.view_count = a.view_count + b.view_count;
+            merged.cart_count = a.cart_count + b.cart_count;
+            merged.purchase_count = a.purchase_count + b.purchase_count;
             return merged;
         }
+    }
 
-        private Map<String, Double> calculateTimeSlotRatios(Integer[] hourlyCounts) {
-            Map<String, Double> timeSlotRatios = new HashMap<>();
+    // 10분 상품 조회 집계
+    public static class ProductViewAggregator implements AggregateFunction<EcommerceEvent, ProductViewAccumulator, ProductViewFeature> {
 
-            int total = Arrays.stream(hourlyCounts).mapToInt(Integer::intValue).sum();
-            if (total == 0) {
-                timeSlotRatios.put("time_slot_0_6", 0.0);
-                timeSlotRatios.put("time_slot_6_12", 0.0);
-                timeSlotRatios.put("time_slot_12_18", 0.0);
-                timeSlotRatios.put("time_slot_18_24", 0.0);
-                return timeSlotRatios;
-            }
-
-            // 각 구간별 활동량 계산
-            int slot0Count = 0, slot6Count = 0, slot12Count = 0, slot18Count = 0;
-
-            for (int hour = 0; hour < 6; hour++) slot0Count += hourlyCounts[hour];
-            for (int hour = 6; hour < 12; hour++) slot6Count += hourlyCounts[hour];
-            for (int hour = 12; hour < 18; hour++) slot12Count += hourlyCounts[hour];
-            for (int hour = 18; hour < 24; hour++) slot18Count += hourlyCounts[hour];
-
-            timeSlotRatios.put("time_slot_0_6", (double) slot0Count / total);
-            timeSlotRatios.put("time_slot_6_12", (double) slot6Count / total);
-            timeSlotRatios.put("time_slot_12_18", (double) slot12Count / total);
-            timeSlotRatios.put("time_slot_18_24", (double) slot18Count / total);
-
-            return timeSlotRatios;
+        @Override
+        public ProductViewAccumulator createAccumulator() {
+            return new ProductViewAccumulator();
         }
+
+        @Override
+        public ProductViewAccumulator add(EcommerceEvent event, ProductViewAccumulator acc) {
+            if ("view".equals(event.event_type)) {
+                acc.user_id = event.user_id;
+                acc.product_id = event.product_id;
+                acc.view_count++;
+            }
+            return acc;
+        }
+
+        @Override
+        public ProductViewFeature getResult(ProductViewAccumulator acc) {
+            ProductViewFeature feature = new ProductViewFeature();
+            feature.user_id = acc.user_id;
+            feature.product_id = acc.product_id;
+            feature.timestamp = System.currentTimeMillis();
+            feature.product_view_count_10m = acc.view_count;
+            return feature;
+        }
+
+        @Override
+        public ProductViewAccumulator merge(ProductViewAccumulator a, ProductViewAccumulator b) {
+            ProductViewAccumulator merged = new ProductViewAccumulator();
+            merged.user_id = a.user_id != null ? a.user_id : b.user_id;
+            merged.product_id = a.product_id != null ? a.product_id : b.product_id;
+            merged.view_count = a.view_count + b.view_count;
+            return merged;
+        }
+    }
+
+    // 세션 집계
+    public static class SessionAggregator implements AggregateFunction<EcommerceEvent, SessionAccumulator, SessionFeature> {
+
+        @Override
+        public SessionAccumulator createAccumulator() {
+            return new SessionAccumulator();
+        }
+
+        @Override
+        public SessionAccumulator add(EcommerceEvent event, SessionAccumulator acc) {
+            acc.user_session = event.user_session;
+            acc.user_id = event.user_id;
+            acc.event_count++;
+
+            long eventTime = event.getEventTimeMillis();
+            if (acc.first_event_time == 0) {
+                acc.first_event_time = eventTime;
+            }
+            acc.last_event_time = eventTime;
+            return acc;
+        }
+
+        @Override
+        public SessionFeature getResult(SessionAccumulator acc) {
+            SessionFeature feature = new SessionFeature();
+            feature.user_session = acc.user_session;
+            feature.user_id = acc.user_id;
+            feature.timestamp = System.currentTimeMillis();
+            feature.total_events_in_session = acc.event_count;
+            feature.session_duration_seconds = (acc.last_event_time - acc.first_event_time) / 1000;
+            return feature;
+        }
+
+        @Override
+        public SessionAccumulator merge(SessionAccumulator a, SessionAccumulator b) {
+            SessionAccumulator merged = new SessionAccumulator();
+            merged.user_session = a.user_session != null ? a.user_session : b.user_session;
+            merged.user_id = a.user_id != null ? a.user_id : b.user_id;
+            merged.event_count = a.event_count + b.event_count;
+            merged.first_event_time = Math.min(a.first_event_time, b.first_event_time);
+            merged.last_event_time = Math.max(a.last_event_time, b.last_event_time);
+            return merged;
+        }
+    }
+
+    // 누적기 클래스들
+    public static class HourlyUserAccumulator {
+        public String user_id;
+        public int view_count = 0;
+        public int cart_count = 0;
+        public int purchase_count = 0;
+    }
+
+    public static class ProductViewAccumulator {
+        public String user_id;
+        public String product_id;
+        public int view_count = 0;
+    }
+
+    public static class SessionAccumulator {
+        public String user_session;
+        public String user_id;
+        public int event_count = 0;
+        public long first_event_time = 0;
+        public long last_event_time = 0;
     }
 
     // JSON 파서
@@ -189,82 +274,125 @@ public class UserFeatureJob {
                 event.price = node.get("price").asDouble();
                 event.user_id = node.get("user_id").asText();
                 event.user_session = node.get("user_session").asText();
+
+                System.out.println("Parsed event: user=" + event.user_id + ", type=" + event.event_type +
+                    ", product=" + event.product_id + ", session=" + event.user_session);
                 return event;
             } catch (Exception e) {
+                System.err.println("Failed to parse JSON: " + json + ", Error: " + e.getMessage());
                 return null;
             }
         }
     }
 
-    // Redis Sink
-    public static class RedisSink extends RichSinkFunction<UserFeatureVector> {
+    // Redis Sink들
+    public static class HourlyFeatureSink extends RichSinkFunction<HourlyUserFeature> {
         private transient JedisPool jedisPool;
-        private final String redisHost;
-        private final int redisPort;
-
-        public RedisSink(String redisHost, int redisPort) {
-            this.redisHost = redisHost;
-            this.redisPort = redisPort;
-        }
 
         @Override
         public void open(Configuration parameters) throws Exception {
             super.open(parameters);
-
             JedisPoolConfig config = new JedisPoolConfig();
             config.setMaxTotal(10);
-            config.setMaxIdle(5);
-            config.setMinIdle(1);
-            config.setTestOnBorrow(true);
-
-            jedisPool = new JedisPool(config, redisHost, redisPort, 2000);
+            jedisPool = new JedisPool(config, "localhost", 6379, 2000);
         }
 
         @Override
-        public void invoke(UserFeatureVector features, Context context) throws Exception {
+        public void invoke(HourlyUserFeature feature, Context context) throws Exception {
             try (Jedis jedis = jedisPool.getResource()) {
-                String key = "user_features:" + features.user_id;
+                String key = "hourly_features:" + feature.user_id;
+                Map<String, String> fields = new HashMap<>();
+                fields.put("user_id", feature.user_id);
+                fields.put("timestamp", String.valueOf(feature.timestamp));
+                fields.put("view_count_1h", String.valueOf(feature.view_count_1h));
+                fields.put("cart_count_1h", String.valueOf(feature.cart_count_1h));
+                fields.put("purchase_count_1h", String.valueOf(feature.purchase_count_1h));
 
-                // HSET 방식으로 시간대 비율 피처만 저장
-                Map<String, String> hashFields = new HashMap<>();
-                hashFields.put("user_id", features.user_id);
-                hashFields.put("timestamp", String.valueOf(features.timestamp));
-
-                // 시간대 비율을 개별 필드로 저장
-                hashFields.put("time_slot_0_6", String.valueOf(features.time_slot_ratios.get("time_slot_0_6")));
-                hashFields.put("time_slot_6_12", String.valueOf(features.time_slot_ratios.get("time_slot_6_12")));
-                hashFields.put("time_slot_12_18", String.valueOf(features.time_slot_ratios.get("time_slot_12_18")));
-                hashFields.put("time_slot_18_24", String.valueOf(features.time_slot_ratios.get("time_slot_18_24")));
-
-                // HSET으로 모든 필드를 한 번에 저장
-                jedis.hset(key, hashFields);
-
-                // TTL 설정 (7일)
-                jedis.expire(key, 604800);
-
-            } catch (Exception e) {
-                System.err.println("Redis write failed for user " + features.user_id + ": " + e.getMessage());
+                jedis.hset(key, fields);
+                jedis.expire(key, 7200); // 2시간 TTL
+                System.out.println("Saved hourly feature: " + key);
             }
         }
 
         @Override
         public void close() throws Exception {
-            super.close();
-            if (jedisPool != null) {
-                jedisPool.close();
+            if (jedisPool != null) jedisPool.close();
+        }
+    }
+
+    public static class ProductFeatureSink extends RichSinkFunction<ProductViewFeature> {
+        private transient JedisPool jedisPool;
+
+        @Override
+        public void open(Configuration parameters) throws Exception {
+            super.open(parameters);
+            JedisPoolConfig config = new JedisPoolConfig();
+            config.setMaxTotal(10);
+            jedisPool = new JedisPool(config, "localhost", 6379, 2000);
+        }
+
+        @Override
+        public void invoke(ProductViewFeature feature, Context context) throws Exception {
+            try (Jedis jedis = jedisPool.getResource()) {
+                String key = "product_features:" + feature.user_id + ":" + feature.product_id;
+                Map<String, String> fields = new HashMap<>();
+                fields.put("user_id", feature.user_id);
+                fields.put("product_id", feature.product_id);
+                fields.put("timestamp", String.valueOf(feature.timestamp));
+                fields.put("product_view_count_10m", String.valueOf(feature.product_view_count_10m));
+
+                jedis.hset(key, fields);
+                jedis.expire(key, 1200); // 20분 TTL
+                System.out.println("Saved product feature: " + key);
             }
+        }
+
+        @Override
+        public void close() throws Exception {
+            if (jedisPool != null) jedisPool.close();
+        }
+    }
+
+    public static class SessionFeatureSink extends RichSinkFunction<SessionFeature> {
+        private transient JedisPool jedisPool;
+
+        @Override
+        public void open(Configuration parameters) throws Exception {
+            super.open(parameters);
+            JedisPoolConfig config = new JedisPoolConfig();
+            config.setMaxTotal(10);
+            jedisPool = new JedisPool(config, "localhost", 6379, 2000);
+        }
+
+        @Override
+        public void invoke(SessionFeature feature, Context context) throws Exception {
+            try (Jedis jedis = jedisPool.getResource()) {
+                String key = "session_features:" + feature.user_session;
+                Map<String, String> fields = new HashMap<>();
+                fields.put("user_session", feature.user_session);
+                fields.put("user_id", feature.user_id);
+                fields.put("timestamp", String.valueOf(feature.timestamp));
+                fields.put("total_events_in_session", String.valueOf(feature.total_events_in_session));
+                fields.put("session_duration_seconds", String.valueOf(feature.session_duration_seconds));
+
+                jedis.hset(key, fields);
+                jedis.expire(key, 3600); // 1시간 TTL
+            }
+        }
+
+        @Override
+        public void close() throws Exception {
+            if (jedisPool != null) jedisPool.close();
         }
     }
 
     public static void main(String[] args) throws Exception {
-        // Web UI가 포함된 로컬 환경 생성
         Configuration conf = new Configuration();
         StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironmentWithWebUI(conf);
 
-        env.setParallelism(1);  // 병렬도 1로 설정
+        env.setParallelism(1);
         env.enableCheckpointing(30000);
 
-        // 체크포인트 저장소 설정 (프로젝트 루트 기준, 절대경로로 변환)
         String projectRoot = System.getProperty("user.dir");
         String checkpointDir = projectRoot + "/flink-checkpoints";
         env.getCheckpointConfig().setCheckpointStorage("file:///" + checkpointDir);
@@ -273,30 +401,46 @@ public class UserFeatureJob {
             .setBootstrapServers("localhost:9092")
             .setTopics("ecommerce-events")
             .setGroupId("feature-engineering-group")
-            .setStartingOffsets(OffsetsInitializer.committedOffsets(OffsetResetStrategy.EARLIEST))
+            .setStartingOffsets(OffsetsInitializer.latest())
             .setValueOnlyDeserializer(new SimpleStringSchema())
             .build();
 
-        DataStream<String> rawStream = env.fromSource(kafkaSource,
-            WatermarkStrategy.noWatermarks(), "Kafka Source");
-
-        DataStream<EcommerceEvent> eventStream = rawStream
+        DataStream<EcommerceEvent> eventStream = env.fromSource(kafkaSource,
+                WatermarkStrategy.noWatermarks(), "Kafka Source")
             .map(new JsonEventParser())
-            .filter(event -> event != null && event.user_id != null)
-            .assignTimestampsAndWatermarks(WatermarkStrategy
-                .<EcommerceEvent>forBoundedOutOfOrderness(Duration.ofSeconds(1))  // 1초만 지연 허용
+            .filter(Objects::nonNull)
+            .assignTimestampsAndWatermarks(WatermarkStrategy.<EcommerceEvent>forBoundedOutOfOrderness(Duration.ofSeconds(10))
                 .withTimestampAssigner((event, timestamp) -> event.getEventTimeMillis()));
 
-        // Event Time 슬라이딩 윈도우로 시간대 피처 계산
-        DataStream<UserFeatureVector> featureStream = eventStream
+        // 1. 1시간 사용자 활동 피처
+        DataStream<HourlyUserFeature> hourlyFeatures = eventStream
             .keyBy(event -> event.user_id)
-            .window(SlidingEventTimeWindows.of(Time.hours(12), Time.minutes(1)))  // 5분 윈도우, 1분 슬라이드
-            .aggregate(new TimeSlotAggregateFunction());
+            .window(SlidingEventTimeWindows.of(Time.hours(1), Time.minutes(10)))
+            .aggregate(new HourlyUserAggregator());
 
-        featureStream.addSink(new RedisSink("localhost", 6379));
+        // 2. 10분 상품별 조회 피처
+        DataStream<ProductViewFeature> productFeatures = eventStream
+            .filter(event -> "view".equals(event.event_type))
+            .keyBy(event -> event.user_id + "_" + event.product_id)
+            .window(SlidingEventTimeWindows.of(Time.minutes(10), Time.minutes(1)))
+            .aggregate(new ProductViewAggregator());
 
-        featureStream.print("Features");
+        // 3. 세션 피처
+        DataStream<SessionFeature> sessionFeatures = eventStream
+            .keyBy(event -> event.user_session)
+            .window(EventTimeSessionWindows.withGap(Time.minutes(30)))
+            .aggregate(new SessionAggregator());
 
-        env.execute("Ecommerce Time Slot Feature Pipeline");
+        // Redis에 저장
+        hourlyFeatures.addSink(new HourlyFeatureSink());
+        productFeatures.addSink(new ProductFeatureSink());
+        sessionFeatures.addSink(new SessionFeatureSink());
+
+        // 콘솔 출력
+        hourlyFeatures.print("HourlyFeatures");
+        productFeatures.print("ProductFeatures");
+        sessionFeatures.print("SessionFeatures");
+
+        env.execute("Real-time Feature Engineering Pipeline");
     }
 }
