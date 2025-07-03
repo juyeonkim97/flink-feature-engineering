@@ -19,12 +19,8 @@ public class UserFeatureAggregator implements AggregateFunction<EcommerceEvent, 
                 acc.view_count++;
                 acc.total_viewed_price += event.price;
                 break;
-            case "cart":
-                acc.cart_count++;
-                break;
-            case "purchase":
-                acc.purchase_count++;
-                break;
+            case "cart": acc.cart_count++; break;
+            case "purchase": acc.purchase_count++; break;
         }
         return acc;
     }

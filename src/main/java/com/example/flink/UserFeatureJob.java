@@ -48,15 +48,15 @@ public class UserFeatureJob {
                 .<EcommerceEvent>forBoundedOutOfOrderness(Duration.ofSeconds(10))
                 .withTimestampAssigner((event, timestamp) -> event.getEventTimeMillis()));
 
-        // 1. User 1-hour features (updated every 10 minutes)
+        // 1. 1시간 사용자 활동 피처
         DataStream<UserFeature> userFeatures = eventStream
             .keyBy(event -> event.user_id)
             .window(SlidingEventTimeWindows.of(Time.hours(1), Time.minutes(10)))
             .aggregate(new UserFeatureAggregator()).name("User Feature Aggregator");
 
-        // 2. Session features (30 minute inactivity timeout)
+        // 2. 세션 피처 - user_id 기반으로 세션 구분
         DataStream<SessionFeature> sessionFeatures = eventStream
-            .keyBy(event -> event.user_session)
+            .keyBy(event -> event.user_id)
             .window(EventTimeSessionWindows.withGap(Time.minutes(30)))
             .aggregate(new SessionAggregator()).name("Session Feature Aggregator");
 

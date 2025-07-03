@@ -15,9 +15,7 @@ public class JsonEventParser implements MapFunction<String, EcommerceEvent> {
             EcommerceEvent event = new EcommerceEvent();
             event.event_time = node.get("event_time").asText();
             event.event_type = node.get("event_type").asText();
-            event.product_id = node.get("product_id").asText();
             event.user_id = node.get("user_id").asText();
-            event.user_session = node.get("user_session").asText();
             event.price = node.get("price").asDouble();
             return event;
         } catch (Exception e) {

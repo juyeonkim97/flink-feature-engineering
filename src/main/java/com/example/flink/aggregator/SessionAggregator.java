@@ -13,7 +13,6 @@ public class SessionAggregator implements AggregateFunction<EcommerceEvent, Sess
 
     @Override
     public SessionAccumulator add(EcommerceEvent event, SessionAccumulator acc) {
-        acc.user_session = event.user_session;
         acc.user_id = event.user_id;
         acc.event_count++;
         
@@ -28,7 +27,6 @@ public class SessionAggregator implements AggregateFunction<EcommerceEvent, Sess
     @Override
     public SessionFeature getResult(SessionAccumulator acc) {
         SessionFeature feature = new SessionFeature();
-        feature.user_session = acc.user_session;
         feature.user_id = acc.user_id;
         feature.timestamp = System.currentTimeMillis();
         feature.event_count = acc.event_count;
@@ -39,7 +37,6 @@ public class SessionAggregator implements AggregateFunction<EcommerceEvent, Sess
     @Override
     public SessionAccumulator merge(SessionAccumulator a, SessionAccumulator b) {
         SessionAccumulator merged = new SessionAccumulator();
-        merged.user_session = a.user_session != null ? a.user_session : b.user_session;
         merged.user_id = a.user_id != null ? a.user_id : b.user_id;
         merged.event_count = a.event_count + b.event_count;
         merged.first_event_time = Math.min(a.first_event_time, b.first_event_time);

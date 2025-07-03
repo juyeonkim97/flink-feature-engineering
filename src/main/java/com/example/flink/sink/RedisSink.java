@@ -41,7 +41,8 @@ public class RedisSink<T> extends RichSinkFunction<T> {
         if (value instanceof UserFeature) {
             return ((UserFeature) value).user_id;
         } else if (value instanceof SessionFeature) {
-            return ((SessionFeature) value).user_session;
+            SessionFeature sf = (SessionFeature) value;
+            return sf.user_id + "_" + sf.timestamp;
         }
         return "unknown";
     }
@@ -57,7 +58,6 @@ public class RedisSink<T> extends RichSinkFunction<T> {
             map.put("avg_viewed_price_1h", String.valueOf(f.avg_viewed_price));
         } else if (value instanceof SessionFeature) {
             SessionFeature f = (SessionFeature) value;
-            map.put("user_session", f.user_session);
             map.put("user_id", f.user_id);
             map.put("event_count", String.valueOf(f.event_count));
             map.put("duration_seconds", String.valueOf(f.duration_seconds));
