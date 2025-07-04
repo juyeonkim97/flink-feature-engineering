@@ -1,9 +1,12 @@
 # Flink Online Feature Pipeline
 
 ## 개요
+- Flink 1.19.2
+- Java 17
 - Source : Kafka
 - Processing : SlidingWindow, SessionWindow 활용
 - Sink : Redis
+
 ## 시스템 아키텍처
 
 ```
@@ -23,7 +26,7 @@
 
 ## Features
 
-### User Feaeture (1시간 윈도우)
+### User Feature (1시간 윈도우)
 Redis Key: `user_features:{user_id}`
 
 | 필드명 | 타입 | 설명 | TTL |
