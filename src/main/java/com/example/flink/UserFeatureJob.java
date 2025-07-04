@@ -17,9 +17,12 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.windowing.assigners.EventTimeSessionWindows;
 import org.apache.flink.streaming.api.windowing.assigners.SlidingEventTimeWindows;
 import org.apache.flink.streaming.api.windowing.time.Time;
+import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 
 import java.time.Duration;
 import java.util.Objects;
+
+import static org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer.committedOffsets;
 
 public class UserFeatureJob {
 
@@ -35,7 +38,7 @@ public class UserFeatureJob {
             .setBootstrapServers("localhost:9092")
             .setTopics("ecommerce-events")
             .setGroupId("feature-engineering-group")
-            .setStartingOffsets(OffsetsInitializer.committedOffsets())
+            .setStartingOffsets(committedOffsets(OffsetResetStrategy.EARLIEST))
             .setValueOnlyDeserializer(new SimpleStringSchema())
             .build();
 
