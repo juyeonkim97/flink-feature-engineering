@@ -10,7 +10,7 @@ public class EcommerceEvent {
 
     public Long getEventTimeMillis() {
         try {
-            return Instant.parse(event_time).toEpochMilli();
+            return Instant.parse(event_time + "+09:00").toEpochMilli();
         } catch (Exception e) {
             return null;
         }

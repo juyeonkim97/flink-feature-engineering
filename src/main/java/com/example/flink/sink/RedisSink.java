@@ -42,7 +42,7 @@ public class RedisSink<T> extends RichSinkFunction<T> {
             return ((UserFeature) value).user_id;
         } else if (value instanceof SessionFeature) {
             SessionFeature sf = (SessionFeature) value;
-            return sf.user_id + "_" + sf.timestamp;
+            return sf.user_id + ":" + sf.timestamp;
         }
         return "unknown";
     }

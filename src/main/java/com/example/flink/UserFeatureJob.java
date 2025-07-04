@@ -35,7 +35,7 @@ public class UserFeatureJob {
             .setBootstrapServers("localhost:9092")
             .setTopics("ecommerce-events")
             .setGroupId("feature-engineering-group")
-            .setStartingOffsets(OffsetsInitializer.earliest())
+            .setStartingOffsets(OffsetsInitializer.committedOffsets())
             .setValueOnlyDeserializer(new SimpleStringSchema())
             .build();
 
@@ -54,10 +54,10 @@ public class UserFeatureJob {
             .window(SlidingEventTimeWindows.of(Time.hours(1), Time.minutes(10)))
             .aggregate(new UserFeatureAggregator()).name("User Feature Aggregator");
 
-        // 2. 세션 피처 - user_id 기반으로 세션 구분
+        // 2. 세션 피처
         DataStream<SessionFeature> sessionFeatures = eventStream
             .keyBy(event -> event.user_id)
-            .window(EventTimeSessionWindows.withGap(Time.minutes(30)))
+            .window(EventTimeSessionWindows.withGap(Time.minutes(10)))
             .aggregate(new SessionAggregator()).name("Session Feature Aggregator");
 
         // Redis storage
