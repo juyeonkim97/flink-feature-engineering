@@ -70,6 +70,51 @@ SlidingEventTimeWindows.of(Time.hours(1), Time.minutes(10))
 EventTimeSessionWindows.withGap(Time.minutes(10))
 ```
 
+## Fault Tolerance
+
+### Checkpoint 설정
+`src/main/resources/application.properties`에서 checkpoint 관련 설정을 관리합니다:
+
+```properties
+# Checkpoint 기본 설정
+execution.checkpointing.interval=30000                              # 30초마다 checkpoint 생성
+execution.checkpointing.mode=EXACTLY_ONCE                           # 정확히 한 번 처리 보장
+execution.checkpointing.externalized-checkpoint-retention=RETAIN_ON_CANCELLATION  # Job 취소 시에도 checkpoint 보존
+
+# State Backend 설정
+state.backend.type=filesystem                                       # 파일시스템 기반 state backend
+state.checkpoints.dir=file:///tmp/flink-checkpoints                # Checkpoint 저장 경로
+
+# 복구 설정 (선택사항)
+execution.savepoint.path=                                           # 특정 checkpoint에서 복구 시 경로 지정
+```
+
+### Checkpoint 동작 방식
+
+- **30초마다** 자동으로 checkpoint 생성
+- **`/tmp/flink-checkpoints/{job-id}/`** 경로에 저장
+- Job 실행 중 장애 시 **자동으로 최신 checkpoint에서 복구**
+- Job 취소 시 checkpoint **보존** (`RETAIN_ON_CANCELLATION`)
+
+### 수동 복구 방법
+
+특정 checkpoint에서 복구하려면 `application.properties`에 경로 지정:
+```properties
+execution.savepoint.path=file:///tmp/flink-checkpoints/{job-id}/chk-{checkpoint-id}
+```
+
+### 모니터링 및 테스트
+
+```bash
+# Checkpoint 생성 확인
+ls -la /tmp/flink-checkpoints/
+
+# 특정 Job의 checkpoint 상세 확인  
+ls -la /tmp/flink-checkpoints/{job-id}/
+```
+
+**Flink WebUI**: http://localhost:8081 → Jobs → Checkpoints에서 실시간 상태 확인
+
 ## 실행 방법
 
 ### 환경 구성
@@ -85,3 +130,4 @@ Kafka, Redis 환경 구성
 - **Kafka UI**: http://localhost:8080
 - **Flink WebUI**: http://localhost:8081
 - **Redis 데이터 확인**: `docker exec -it redis redis-cli keys "*"`
+- **Checkpoint 모니터링**: http://localhost:8081 → Jobs → Checkpoints
