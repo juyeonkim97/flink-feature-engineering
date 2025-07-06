@@ -10,8 +10,8 @@ import com.example.flink.util.JsonEventParser;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.common.serialization.SimpleStringSchema;
 import org.apache.flink.configuration.Configuration;
+
 import org.apache.flink.connector.kafka.source.KafkaSource;
-import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.windowing.assigners.EventTimeSessionWindows;
@@ -19,8 +19,10 @@ import org.apache.flink.streaming.api.windowing.assigners.SlidingEventTimeWindow
 import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 
+import java.io.InputStream;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.Properties;
 
 import static org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer.committedOffsets;
 
@@ -28,10 +30,12 @@ public class UserFeatureJob {
 
     public static void main(String[] args) throws Exception {
         Configuration conf = new Configuration();
+        // application.properties에서 설정 로드
+        loadApplicationProperties(conf);
+
         StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironmentWithWebUI(conf);
 
         env.setParallelism(1);
-        env.enableCheckpointing(30000);
 
         // Kafka 소스 설정
         KafkaSource<String> kafkaSource = KafkaSource.<String>builder()
@@ -72,5 +76,22 @@ public class UserFeatureJob {
         sessionFeatures.print("SessionFeature").name("Session Feature Print");
 
         env.execute("Real-time Feature Engineering Pipeline");
+    }
+
+    private static void loadApplicationProperties(Configuration conf) {
+        try (InputStream input = UserFeatureJob.class.getClassLoader().getResourceAsStream("application.properties")) {
+            Properties properties = new Properties();
+            properties.load(input);
+
+            // 모든 properties를 Configuration에 추가
+            for (String key : properties.stringPropertyNames()) {
+                String value = properties.getProperty(key);
+                if (value != null && !value.trim().isEmpty()) {
+                    conf.setString(key, value);
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Failed to load application.properties: " + e.getMessage());
+        }
     }
 }
