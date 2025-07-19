@@ -96,14 +96,7 @@ execution.savepoint.path=                                           # 특정 che
 - Job 실행 중 장애 시 **자동으로 최신 checkpoint에서 복구**
 - Job 취소 시 checkpoint **보존** (`RETAIN_ON_CANCELLATION`)
 
-### 수동 복구 방법
-
-특정 checkpoint에서 복구하려면 `application.properties`에 경로 지정:
-```properties
-execution.savepoint.path=file:///tmp/flink-checkpoints/{job-id}/chk-{checkpoint-id}
-```
-
-### 모니터링 및 테스트
+### Checkpoint 생성 확인
 
 ```bash
 # Checkpoint 생성 확인
@@ -113,9 +106,69 @@ ls -la /tmp/flink-checkpoints/
 ls -la /tmp/flink-checkpoints/{job-id}/
 ```
 
-**Flink WebUI**: http://localhost:8081 → Jobs → Checkpoints에서 실시간 상태 확인
+### Checkpoint 수동 복구 방법
 
-## 실행 방법
+특정 checkpoint에서 복구하려면 `application.properties`에 경로 지정:
+```properties
+execution.savepoint.path=file:///tmp/flink-checkpoints/{job-id}/chk-{checkpoint-id}
+```
+
+### Savepoint 동작 방식
+
+- **수동으로** 생성하는 일관된 스냅샷
+- **Job 업그레이드, 클러스터 이전** 시 사용
+- **독립적이고 완전한** 상태 저장
+- **수동 삭제** 전까지 영구 보존
+- **`/tmp/flink-savepoints/savepoint-{job-id-prefix}-{hash}/`** 경로에 저장
+
+### Savepoint 생성 방법
+
+1. **Flink WebUI에서 Job ID 확인**: http://localhost:8081 → Jobs
+2. **REST API로 Savepoint 생성**:
+   ```bash
+   curl -X POST http://localhost:8081/jobs/{job-id}/savepoints \
+     -H "Content-Type: application/json" \
+     -d '{"target-directory": "/tmp/flink-savepoints"}'
+   ```
+   
+   예시:
+   ```bash
+   curl -X POST http://localhost:8081/jobs/2bc956344692aafba786779468d22e4b/savepoints \
+     -H "Content-Type: application/json" \
+     -d '{"target-directory": "/tmp/flink-savepoints"}'
+   ```
+
+### Savepoint 생성 확인
+
+```bash
+# Savepoint 생성 확인
+ls -la /tmp/flink-savepoints/
+
+# 생성된 savepoint 경로 예시
+# /tmp/flink-savepoints/savepoint-2bc956-66f2bb60eec0/
+```
+
+### Savepoint 수동 복구 방법
+
+특정 savepoint에서 복구하려면 `application.properties`에 경로 지정:
+```properties
+execution.savepoint.path=file:///tmp/flink-savepoints/savepoint-2bc956-66f2bb60eec0
+```
+
+### 모니터링 및 복구 확인
+
+#### Checkpoint/Savepoint 상태 모니터링
+- **Flink WebUI**: http://localhost:8081 → Jobs → Checkpoints에서 실시간 상태 확인
+- **Checkpoint 히스토리**: 생성 시간, 크기, 소요 시간 등 확인
+- **Savepoint 생성**: WebUI에서 수동으로 savepoint 생성 가능
+
+#### 복구 확인 방법
+Job이 checkpoint/savepoint에서 성공적으로 복구되었는지 확인:
+- **Flink WebUI**: http://localhost:8081 → Jobs → Overview
+- **"Restored"** 값이 **1**로 표시되면 복구 성공
+- 복구된 checkpoint/savepoint 경로도 함께 표시
+
+## 애플리케이션 실행 방법
 
 ### 환경 구성
 ```bash
@@ -130,4 +183,3 @@ Kafka, Redis 환경 구성
 - **Kafka UI**: http://localhost:8080
 - **Flink WebUI**: http://localhost:8081
 - **Redis 데이터 확인**: `docker exec -it redis redis-cli keys "*"`
-- **Checkpoint 모니터링**: http://localhost:8081 → Jobs → Checkpoints
